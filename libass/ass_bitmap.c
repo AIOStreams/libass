@@ -238,23 +238,29 @@ void ass_shift_bitmap(Bitmap *bm, int shift_x, int shift_y)
     ptrdiff_t s = bm->stride;
     uint8_t *buf = bm->buffer;
 
-    // Shift in x direction
-    if (shift_x)
+    // Shift in x direction: each pixel passes the next one a share of its
+    // original value.
+    if (shift_x && w > 1)
         for (int32_t y = 0; y < h; y++) {
-            for (int32_t x = w - 1; x > 0; x--) {
-                uint8_t b = buf[x + y * s - 1] * shift_x >> 6;
-                buf[x + y * s - 1] -= b;
-                buf[x + y * s] += b;
+            uint8_t *row = buf + y * s;
+            uint8_t carry = 0;
+            for (int32_t x = 0; x < w - 1; x++) {
+                uint8_t b = row[x] * shift_x >> 6;
+                row[x] = row[x] - b + carry;
+                carry = b;
             }
+            row[w - 1] += carry;
         }
 
-    // Shift in y direction
+    // Shift in y direction, a row at a time so it vectorizes
     if (shift_y)
-        for (int32_t x = 0; x < w; x++) {
-            for (int32_t y = h - 1; y > 0; y--) {
-                uint8_t b = buf[x + y * s - s] * shift_y >> 6;
-                buf[x + y * s - s] -= b;
-                buf[x + y * s] += b;
+        for (int32_t y = h - 1; y > 0; y--) {
+            uint8_t *restrict dst = buf + y * s;
+            uint8_t *restrict src = dst - s;
+            for (int32_t x = 0; x < w; x++) {
+                uint8_t b = src[x] * shift_y >> 6;
+                src[x] -= b;
+                dst[x] += b;
             }
         }
 }
