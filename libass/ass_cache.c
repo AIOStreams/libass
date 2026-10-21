@@ -325,6 +325,43 @@ const CacheDesc glyph_metrics_cache_desc = {
 };
 
 
+// shaped run cache
+static bool shape_key_move(void *dst, void *src)
+{
+    ShapeHashKey *d = dst, *s = src;
+    if (!d)
+        return true;
+
+    *d = *s;
+    d->text.str = ass_copy_string(s->text);
+    if (!d->text.str)
+        return false;
+    ass_cache_inc_ref(s->font);
+    return true;
+}
+
+static void shape_destruct(void *key, void *value)
+{
+    ShapeHashKey *k = key;
+    ShapeHashValue *v = value;
+    free(v->glyphs);
+    free((char *) k->text.str);
+    ass_cache_dec_ref(k->font);
+}
+
+size_t ass_shape_construct(void *key, void *value, void *priv);
+
+const CacheDesc shape_cache_desc = {
+    .hash_func = shape_hash,
+    .compare_func = shape_compare,
+    .key_move_func = shape_key_move,
+    .construct_func = ass_shape_construct,
+    .destruct_func = shape_destruct,
+    .key_size = sizeof(ShapeHashKey),
+    .value_size = sizeof(ShapeHashValue)
+};
+
+
 
 // Cache data
 typedef struct cache_item {
@@ -558,6 +595,11 @@ Cache *ass_outline_cache_create(void)
 Cache *ass_glyph_metrics_cache_create(void)
 {
     return ass_cache_create(&glyph_metrics_cache_desc);
+}
+
+Cache *ass_shape_cache_create(void)
+{
+    return ass_cache_create(&shape_cache_desc);
 }
 
 Cache *ass_face_size_metrics_cache_create(void)

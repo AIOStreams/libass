@@ -45,6 +45,7 @@
 #define BITMAP_CACHE_MAX_SIZE (128 * MEGABYTE)
 #define COMPOSITE_CACHE_RATIO 2
 #define COMPOSITE_CACHE_MAX_SIZE (BITMAP_CACHE_MAX_SIZE / COMPOSITE_CACHE_RATIO)
+#define SHAPE_CACHE_MAX_SIZE (2 * MEGABYTE)
 
 #define PARSED_FADE (1<<0)
 #define PARSED_A    (1<<1)
@@ -303,6 +304,7 @@ typedef struct {
     Cache *composite_cache;
     Cache *face_size_metrics_cache;
     Cache *metrics_cache;
+    Cache *shape_cache;
     size_t glyph_max;
     size_t bitmap_max_size;
     size_t composite_max_size;
