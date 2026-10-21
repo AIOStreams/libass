@@ -597,7 +597,8 @@ int ass_fonts_update(ASS_Renderer *priv);
 
 /**
  * \brief Set hard cache limits.  Do not set, or set to zero, for reasonable
- * defaults.
+ * defaults.  The default bitmap cache size is for a 4K frame and shrinks with
+ * smaller frames, to no less than 32 MB.
  *
  * \param priv renderer handle
  * \param glyph_max maximum number of cached glyphs

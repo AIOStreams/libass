@@ -200,10 +200,8 @@ void ass_set_cache_limits(ASS_Renderer *render_priv, int glyph_max,
         bitmap_cache = MEGABYTE * (size_t) bitmap_max;
         composite_cache = bitmap_cache / (COMPOSITE_CACHE_RATIO + 1);
         bitmap_cache -= composite_cache;
-    } else {
-        bitmap_cache = BITMAP_CACHE_MAX_SIZE;
-        composite_cache = COMPOSITE_CACHE_MAX_SIZE;
-    }
+    } else
+        bitmap_cache = composite_cache = 0;
     render_priv->cache.bitmap_max_size = bitmap_cache;
     render_priv->cache.composite_max_size = composite_cache;
 }

@@ -150,8 +150,6 @@ ASS_Renderer *ass_renderer_init(ASS_Library *library)
         goto fail;
 
     priv->cache.glyph_max = GLYPH_CACHE_MAX;
-    priv->cache.bitmap_max_size = BITMAP_CACHE_MAX_SIZE;
-    priv->cache.composite_max_size = COMPOSITE_CACHE_MAX_SIZE;
 
     if (!render_context_init(&priv->state, priv))
         goto fail;
@@ -3024,8 +3022,17 @@ ass_render_event(RenderContext *state, ASS_Event *event,
  */
 static void check_cache_limits(ASS_Renderer *priv, CacheStore *cache)
 {
-    ass_cache_cut(cache->composite_cache, cache->composite_max_size);
-    ass_cache_cut(cache->bitmap_cache, cache->bitmap_max_size);
+    size_t bitmap_max = cache->bitmap_max_size, composite_max = cache->composite_max_size;
+    if (!bitmap_max) {
+        // Bitmaps grow with the frame's area, so a smaller frame fits as many in less memory.
+        double area = (double) priv->settings.frame_width * priv->settings.frame_height;
+        double scale = FFMINMAX(area / DEFAULT_CACHE_FRAME_AREA,
+                                (double) DEFAULT_CACHE_MIN_SIZE / (BITMAP_CACHE_MAX_SIZE + COMPOSITE_CACHE_MAX_SIZE), 1);
+        bitmap_max = BITMAP_CACHE_MAX_SIZE * scale;
+        composite_max = COMPOSITE_CACHE_MAX_SIZE * scale;
+    }
+    ass_cache_cut(cache->composite_cache, composite_max);
+    ass_cache_cut(cache->bitmap_cache, bitmap_max);
     ass_cache_cut(cache->outline_cache, cache->glyph_max);
     ass_cache_cut(cache->shape_cache, SHAPE_CACHE_MAX_SIZE);
 }
