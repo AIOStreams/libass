@@ -89,6 +89,11 @@ AC_SEARCH_LIBS([lrint], [m], [
 ], [
     AC_MSG_ERROR([Unable to locate math functions!])
 ])
+AC_SEARCH_LIBS([pthread_create], [pthread], [
+    # noop
+], [
+    AC_MSG_ERROR([Unable to locate pthreads!])
+])
 pkg_libs="$LIBS"
 
 ## Check for libraries via pkg-config and add to pkg_requires as needed

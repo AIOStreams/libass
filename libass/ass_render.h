@@ -211,6 +211,7 @@ typedef struct {
 // Values like current font face, color, screen position, clipping and so on are stored here.
 struct render_context {
     ASS_Renderer *renderer;
+    CacheClient cache_client;
     TextInfo text_info;
     ASS_Shaper *shaper;
     RasterizerData rasterizer;

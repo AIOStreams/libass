@@ -32,7 +32,7 @@ typedef struct ass_shaper ASS_Shaper;
 
 void ass_shaper_info(ASS_Library *lib);
 ASS_Shaper *ass_shaper_new(Cache *metrics_cache, Cache *face_size_metrics_cache,
-                           Cache *shape_cache);
+                           Cache *shape_cache, CacheClient *cache_client);
 void ass_shaper_free(ASS_Shaper *shaper);
 bool ass_create_hb_font(ASS_Font *font, int index);
 void ass_shaper_set_kerning(ASS_Shaper *shaper, bool kern);

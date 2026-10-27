@@ -84,7 +84,7 @@ static bool render_context_init(RenderContext *state, ASS_Renderer *priv)
         return false;
 
     if (!(state->shaper = ass_shaper_new(priv->cache.metrics_cache, priv->cache.face_size_metrics_cache,
-                                         priv->cache.shape_cache)))
+                                         priv->cache.shape_cache, &state->cache_client)))
         return false;
 
     return ass_rasterizer_init(&priv->engine, &state->rasterizer, RASTERIZER_PRECISION);
@@ -722,12 +722,14 @@ static void blend_vector_clip(RenderContext *state, ASS_Image *head)
 
     ASS_Vector pos;
     BitmapHashKey key;
-    key.outline = ass_cache_get(render_priv->cache.outline_cache, &ol_key, render_priv);
+    key.outline = ass_cache_get(render_priv->cache.outline_cache,
+                                &state->cache_client, &ol_key, render_priv);
     if (!key.outline || !key.outline->valid ||
             !quantize_transform(m, &pos, NULL, true, &key))
         return;
 
-    Bitmap *clip_bm = ass_cache_get(render_priv->cache.bitmap_cache, &key, state);
+    Bitmap *clip_bm = ass_cache_get(render_priv->cache.bitmap_cache,
+                                    &state->cache_client, &key, state);
     if (!clip_bm)
         return;
 
@@ -1183,7 +1185,7 @@ get_outline_glyph(RenderContext *state, GlyphInfo *info)
     if (info->drawing_text.str) {
         key.type = OUTLINE_DRAWING;
         key.u.drawing.text = info->drawing_text;
-        val = ass_cache_get(priv->cache.outline_cache, &key, priv);
+        val = ass_cache_get(priv->cache.outline_cache, &state->cache_client, &key, priv);
         if (!val || !val->valid)
             return;
 
@@ -1206,7 +1208,7 @@ get_outline_glyph(RenderContext *state, GlyphInfo *info)
         k->italic = info->italic;
         k->flags = info->flags;
 
-        val = ass_cache_get(priv->cache.outline_cache, &key, priv);
+        val = ass_cache_get(priv->cache.outline_cache, &state->cache_client, &key, priv);
         if (!val || !val->valid)
             return;
 
@@ -1411,7 +1413,7 @@ get_bitmap_glyph(RenderContext *state, GlyphInfo *info,
     if (!quantize_transform(m, pos, offset, first, &key))
         return;
 
-    info->bm = ass_cache_get(render_priv->cache.bitmap_cache, &key, state);
+    info->bm = ass_cache_get(render_priv->cache.bitmap_cache, &state->cache_client, &key, state);
     if (!info->bm || !info->bm->buffer)
         info->bm = NULL;
 
@@ -1530,12 +1532,13 @@ get_bitmap_glyph(RenderContext *state, GlyphInfo *info,
         }
     }
 
-    key.outline = ass_cache_get(render_priv->cache.outline_cache, &ol_key, render_priv);
+    key.outline = ass_cache_get(render_priv->cache.outline_cache,
+                                &state->cache_client, &ol_key, render_priv);
     if (!key.outline || !key.outline->valid ||
             !quantize_transform(m, pos_o, offset, false, &key))
         return;
 
-    info->bm_o = ass_cache_get(render_priv->cache.bitmap_cache, &key, state);
+    info->bm_o = ass_cache_get(render_priv->cache.bitmap_cache, &state->cache_client, &key, state);
     if (!info->bm_o || !info->bm_o->buffer) {
         info->bm_o = NULL;
         *pos_o = *pos;
@@ -2590,7 +2593,8 @@ static void render_and_combine_glyphs(RenderContext *state,
         key.filter = info->filter;
         key.bitmap_count = info->bitmap_count;
         key.bitmaps = info->bitmaps;
-        CompositeHashValue *val = ass_cache_get(render_priv->cache.composite_cache, &key, render_priv);
+        CompositeHashValue *val = ass_cache_get(render_priv->cache.composite_cache,
+                                                &state->cache_client, &key, render_priv);
         if (!val)
             continue;
 
@@ -3443,6 +3447,8 @@ ASS_Image *ass_render_frame(ASS_Renderer *priv, ASS_Track *track,
 
     if (detect_change)
         *detect_change = ass_detect_change(priv);
+
+    ass_cache_flush(&priv->state.cache_client);
 
     // free the previous image list
     ass_frame_unref(priv->prev_images_root);

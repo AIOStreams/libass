@@ -11,7 +11,7 @@ AM_CPPFLAGS = -I$(top_srcdir)/libass
 # non-POSIX interfaces even if their respective feature macro is set too.
 # However, POSIX interfaces are usually implicitly enabled
 # with other feature macros, thus omit the POSIX one.
-AM_CFLAGS = -std=gnu99 -D_GNU_SOURCE -D_XPLATFORM_SOURCE
+AM_CFLAGS = -std=gnu11 -D_GNU_SOURCE -D_XPLATFORM_SOURCE
 
 EXTRA_DIST = libass.pc.in Changelog MAINTAINERS RELEASEVERSION ltnasm.sh
 

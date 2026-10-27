@@ -61,7 +61,7 @@ typedef ass_hashcode (*HashFunction)(void *key, ass_hashcode hval);
 typedef bool (*HashCompare)(void *a, void *b);
 typedef bool (*CacheKeyMove)(void *dst, void *src);
 typedef size_t (*CacheValueConstructor)(void *key, void *value, void *priv);
-typedef void (*CacheItemDestructor)(void *key, void *value);
+typedef void (*CacheDestructor)(void *key_or_value);
 
 // cache hash keys
 
@@ -103,16 +103,26 @@ typedef struct
     HashCompare compare_func;
     CacheKeyMove key_move_func;
     CacheValueConstructor construct_func;
-    CacheItemDestructor destruct_func;
+    CacheDestructor key_destruct_func;
+    CacheDestructor value_destruct_func;    // optional
     size_t key_size;
     size_t value_size;
 } CacheDesc;
 
+// One thread's use of the caches: the items it used first this frame, which
+// ass_cache_flush() moves to the back of their caches' eviction order.
+typedef struct {
+    struct cache_item *recent;
+} CacheClient;
+
+// Lookups may run on several threads at once, each with its own client.
+// ass_cache_flush(), ass_cache_cut() and ass_cache_empty() may not overlap them.
 Cache *ass_cache_create(const CacheDesc *desc);
-void *ass_cache_get(Cache *cache, void *key, void *priv);
+void *ass_cache_get(Cache *cache, CacheClient *client, void *key, void *priv);
 void *ass_cache_key(void *value);
 void ass_cache_inc_ref(void *value);
 void ass_cache_dec_ref(void *value);
+void ass_cache_flush(CacheClient *client);
 void ass_cache_cut(Cache *cache, size_t max_size);
 void ass_cache_empty(Cache *cache);
 void ass_cache_done(Cache *cache);

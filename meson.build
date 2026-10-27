@@ -4,7 +4,7 @@ project(
     license: 'ISC',
     meson_version: '>= 0.64.0',
     default_options: [
-        'c_std=gnu99',
+        'c_std=gnu11',
         'buildtype=debugoptimized',
         'warning_level=2',
         'default_library=static',
@@ -86,6 +86,7 @@ endif
 # Dependencies
 
 deps += cc.find_library('m', required: false)
+deps += dependency('threads')
 
 iconv_dep = dependency('iconv', required: false)
 if iconv_dep.found()
