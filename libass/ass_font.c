@@ -496,16 +496,16 @@ FT_Face ass_face_stream(ASS_Library *lib, FT_Library ftlib, const char *name,
  * \brief Select a face with the given charcode and add it to ASS_Font
  * \return index of the new face in font->faces, -1 if failed
  */
-static int add_face(ASS_FontSelector *fontsel, ASS_Font *font, uint32_t ch)
+static int add_face_locked(ASS_FontSelector *fontsel, ASS_Font *font, uint32_t ch,
+                           int n_faces)
 {
     char *path;
     char *postscript_name = NULL;
     int i, index, uid;
     ASS_FontStream stream = { NULL, NULL };
     FT_Face face;
-    int ret = -1;
 
-    if (font->n_faces == ASS_FONT_MAX_FACES)
+    if (n_faces == ASS_FONT_MAX_FACES)
         return -1;
 
     path = ass_font_select(fontsel, font, &index,
@@ -514,7 +514,7 @@ static int add_face(ASS_FontSelector *fontsel, ASS_Font *font, uint32_t ch)
     if (!path)
         return -1;
 
-    for (i = 0; i < font->n_faces; i++) {
+    for (i = 0; i < n_faces; i++) {
         if (font->faces_uid[i] == uid) {
             ass_msg(font->library, MSGL_INFO,
                     "Got a font face that already is available! Skipping.");
@@ -535,17 +535,37 @@ static int add_face(ASS_FontSelector *fontsel, ASS_Font *font, uint32_t ch)
 
     ass_charmap_magic(font->library, face);
     set_font_metrics(face);
+    face->generic.data = font;
 
-    font->faces[font->n_faces] = face;
-    font->faces_uid[font->n_faces] = uid;
-    if (!ass_create_hb_font(font, font->n_faces)) {
+    font->char_indices[n_faces] = calloc(1 << ASS_FONT_INDEX_CACHE_BITS,
+                                         sizeof(*font->char_indices[n_faces]));
+    font->faces[n_faces] = face;
+    font->faces_uid[n_faces] = uid;
+    if (!font->char_indices[n_faces] || !ass_create_hb_font(font, n_faces)) {
+        free(font->char_indices[n_faces]);
+        font->char_indices[n_faces] = NULL;
         FT_Done_Face(face);
-        goto fail;
+        return -1;
     }
+    return n_faces;
+}
 
-    ret = font->n_faces++;
-
-fail:
+// The first `seen` faces are known to lack the character.
+static int add_face(ASS_FontSelector *fontsel, ASS_Font *font, uint32_t ch, int seen)
+{
+    ass_fontselect_lock(fontsel);
+    int n_faces = atomic_load_explicit(&font->n_faces, memory_order_relaxed);
+    int ret = -1;
+    // a face another thread added meanwhile may have it
+    for (int i = seen; i < n_faces && ret < 0; i++)
+        if (ass_font_get_char_index(font, i, ch))
+            ret = i;
+    if (ret < 0) {
+        ret = add_face_locked(fontsel, font, ch, n_faces);
+        if (ret == n_faces)
+            atomic_store_explicit(&font->n_faces, n_faces + 1, memory_order_release);
+    }
+    ass_fontselect_unlock(fontsel);
     return ret;
 }
 
@@ -570,13 +590,14 @@ size_t ass_font_construct(void *key, void *value, void *priv)
 
     font->library = render_priv->library;
     font->ftlibrary = render_priv->ftlibrary;
-    font->n_faces = 0;
+    atomic_init(&font->n_faces, 0);
+    pthread_mutex_init(&font->lock, NULL);
     font->desc.family = desc->family;
     font->desc.bold = desc->bold;
     font->desc.italic = desc->italic;
     font->desc.vertical = desc->vertical;
 
-    int error = add_face(render_priv->fontselect, font, 0);
+    int error = add_face(render_priv->fontselect, font, 0, 0);
     if (error == -1)
         font->library = NULL;
     return 1;
@@ -700,6 +721,51 @@ static void ass_glyph_italicize(FT_Face face)
     FT_Outline_Transform(&face->glyph->outline, &xfrm);
 }
 
+static inline _Atomic uint64_t *char_index_slot(ASS_Font *font, int face_index, uint32_t symbol)
+{
+    unsigned slot = (symbol * 2654435761u) >> (32 - ASS_FONT_INDEX_CACHE_BITS);
+    return &font->char_indices[face_index][slot];
+}
+
+/**
+ * \brief FT_Get_Char_Index() for the symbol, after ass_font_index_magic(),
+ * through the face's cache
+ */
+uint32_t ass_font_get_char_index(ASS_Font *font, int face_index, uint32_t symbol)
+{
+    _Atomic uint64_t *slot = char_index_slot(font, face_index, symbol);
+    uint64_t entry = atomic_load_explicit(slot, memory_order_relaxed);
+    if (entry && entry >> 32 == symbol)
+        return (uint32_t) entry - 1;
+
+    FT_Face face = font->faces[face_index];
+    ass_font_lock(font);
+    uint32_t index = ass_font_index_magic(face, symbol);
+    if (index)
+        index = FT_Get_Char_Index(face, index);
+    atomic_store_explicit(slot, (uint64_t) symbol << 32 | (index + 1), memory_order_relaxed);
+    ass_font_unlock(font);
+    return index;
+}
+
+// Leaves the face on the first charmap that has the symbol, or the last one.
+static uint32_t get_char_index_any_charmap(ASS_Font *font, int face_index, uint32_t symbol)
+{
+    FT_Face face = font->faces[face_index];
+    uint32_t index = 0;
+    ass_font_lock(font);
+    for (int i = 0; i < face->num_charmaps && !index; i++) {
+        FT_Set_Charmap(face, face->charmaps[i]);
+        index = ass_font_index_magic(face, symbol);
+        if (index)
+            index = FT_Get_Char_Index(face, index);
+    }
+    for (int i = 0; i < 1 << ASS_FONT_INDEX_CACHE_BITS; i++)
+        atomic_store_explicit(&font->char_indices[face_index][i], 0, memory_order_relaxed);
+    ass_font_unlock(font);
+    return index;
+}
+
 /**
  * \brief Get glyph and face index
  * Finds a face that has the requested codepoint and returns both face
@@ -718,16 +784,14 @@ int ass_font_get_index(ASS_FontSelector *fontsel, ASS_Font *font,
         *face_index = 0;
         return 0;
     }
-    if (font->n_faces == 0) {
+    int n_faces = atomic_load_explicit(&font->n_faces, memory_order_acquire);
+    if (n_faces == 0) {
         *face_index = 0;
         return 0;
     }
 
-    for (i = 0; i < font->n_faces && index == 0; ++i) {
-        face = font->faces[i];
-        index = ass_font_index_magic(face, symbol);
-        if (index)
-            index = FT_Get_Char_Index(face, index);
+    for (i = 0; i < n_faces && index == 0; ++i) {
+        index = ass_font_get_char_index(font, i, symbol);
         if (index)
             *face_index = i;
     }
@@ -738,23 +802,14 @@ int ass_font_get_index(ASS_FontSelector *fontsel, ASS_Font *font,
                 "Glyph 0x%X not found, selecting one more "
                 "font for (%.*s, %d, %d)", symbol, (int) font->desc.family.len, font->desc.family.str,
                 font->desc.bold, font->desc.italic);
-        face_idx = *face_index = add_face(fontsel, font, symbol);
+        face_idx = *face_index = add_face(fontsel, font, symbol, n_faces);
         if (face_idx >= 0) {
             face = font->faces[face_idx];
-            index = ass_font_index_magic(face, symbol);
-            if (index)
-                index = FT_Get_Char_Index(face, index);
+            index = ass_font_get_char_index(font, face_idx, symbol);
             if (index == 0 && face->num_charmaps > 0) {
-                int i;
                 ass_msg(font->library, MSGL_WARN,
                     "Glyph 0x%X not found, broken font? Trying all charmaps", symbol);
-                for (i = 0; i < face->num_charmaps; i++) {
-                    FT_Set_Charmap(face, face->charmaps[i]);
-                    index = ass_font_index_magic(face, symbol);
-                    if (index)
-                        index = FT_Get_Char_Index(face, index);
-                    if (index) break;
-                }
+                index = get_char_index_any_charmap(font, face_idx, symbol);
             }
             if (index == 0) {
                 ass_msg(font->library, MSGL_ERR,
@@ -817,13 +872,15 @@ bool ass_font_get_glyph(ASS_Font *font, int face_index, int index,
  **/
 void ass_font_clear(ASS_Font *font)
 {
-    int i;
-    for (i = 0; i < font->n_faces; ++i) {
+    int n_faces = atomic_load_explicit(&font->n_faces, memory_order_relaxed);
+    for (int i = 0; i < n_faces; ++i) {
         if (font->faces[i])
             FT_Done_Face(font->faces[i]);
         if (font->hb_fonts[i])
             hb_font_destroy(font->hb_fonts[i]);
+        free(font->char_indices[i]);
     }
+    pthread_mutex_destroy(&font->lock);
 }
 
 /**

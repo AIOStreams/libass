@@ -21,6 +21,7 @@
 #include "ass_compat.h"
 
 #include <stdlib.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <limits.h>
 #include <assert.h>
@@ -101,6 +102,8 @@ struct font_selector {
 
     ASS_FontProvider *default_provider;
     ASS_FontProvider *embedded_provider;
+
+    pthread_mutex_t lock;
 };
 
 struct font_provider {
@@ -1076,6 +1079,7 @@ ass_fontselect_init(ASS_Library *library, FT_Library ftlibrary, size_t *num_emfo
     if (priv == NULL)
         return NULL;
 
+    pthread_mutex_init(&priv->lock, NULL);
     priv->library = library;
     priv->ftlibrary = ftlibrary;
     priv->uid = 1;
@@ -1125,6 +1129,7 @@ fail:
     free(priv->family_default);
     free(priv->path_default);
 
+    pthread_mutex_destroy(&priv->lock);
     free(priv);
 
     return NULL;
@@ -1169,7 +1174,18 @@ void ass_fontselect_free(ASS_FontSelector *priv)
     free(priv->path_default);
     free(priv->family_default);
 
+    pthread_mutex_destroy(&priv->lock);
     free(priv);
+}
+
+void ass_fontselect_lock(ASS_FontSelector *priv)
+{
+    pthread_mutex_lock(&priv->lock);
+}
+
+void ass_fontselect_unlock(ASS_FontSelector *priv)
+{
+    pthread_mutex_unlock(&priv->lock);
 }
 
 void ass_map_font(const ASS_FontMapping *map, int len, const char *name,

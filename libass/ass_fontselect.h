@@ -252,6 +252,9 @@ char *ass_font_select(ASS_FontSelector *priv,
                       const ASS_Font *font, int *index, char **postscript_name,
                       int *uid, ASS_FontStream *data, uint32_t code);
 void ass_fontselect_free(ASS_FontSelector *priv);
+// For FT_Library and the selector, which threads adding faces share
+void ass_fontselect_lock(ASS_FontSelector *priv);
+void ass_fontselect_unlock(ASS_FontSelector *priv);
 
 // Font provider functions
 ASS_FontProvider *ass_font_provider_new(ASS_FontSelector *selector,

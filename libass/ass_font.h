@@ -20,6 +20,8 @@
 #define LIBASS_FONT_H
 
 #include <stdint.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
@@ -35,6 +37,7 @@ typedef struct ass_font ASS_Font;
 #define VERTICAL_LOWER_BOUND 0x02f1
 
 #define ASS_FONT_MAX_FACES 10
+#define ASS_FONT_INDEX_CACHE_BITS 9
 #define DECO_UNDERLINE     1
 #define DECO_STRIKETHROUGH 2
 #define DECO_ROTATE        4
@@ -46,7 +49,10 @@ struct ass_font {
     int faces_uid[ASS_FONT_MAX_FACES];
     FT_Face faces[ASS_FONT_MAX_FACES];
     struct hb_font_t *hb_fonts[ASS_FONT_MAX_FACES];
-    int n_faces;
+    // Each face's glyph indices, read without the lock: codepoint << 32 | index + 1
+    _Atomic uint64_t *char_indices[ASS_FONT_MAX_FACES];
+    atomic_int n_faces;     // faces below it are complete
+    pthread_mutex_t lock;   // FreeType lets one thread at a time use a face
 };
 
 void ass_charmap_magic(ASS_Library *library, FT_Face face);
@@ -60,9 +66,20 @@ void ass_font_get_asc_desc(ASS_Font *font, int face_index,
 int ass_font_get_index(ASS_FontSelector *fontsel, ASS_Font *font,
                        uint32_t symbol, int *face_index, int *glyph_index);
 uint32_t ass_font_index_magic(FT_Face face, uint32_t symbol);
+uint32_t ass_font_get_char_index(ASS_Font *font, int face_index, uint32_t symbol);
 bool ass_font_get_glyph(ASS_Font *font, int face_index, int index,
                         ASS_Hinting hinting);
 void ass_font_clear(ASS_Font *font);
+
+static inline void ass_font_lock(ASS_Font *font)
+{
+    pthread_mutex_lock(&font->lock);
+}
+
+static inline void ass_font_unlock(ASS_Font *font)
+{
+    pthread_mutex_unlock(&font->lock);
+}
 
 bool ass_get_glyph_outline(ASS_Outline *outline, int32_t *advance,
                            FT_Face face, unsigned flags);
