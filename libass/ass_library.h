@@ -20,6 +20,7 @@
 #define LIBASS_LIBRARY_H
 
 #include <stdarg.h>
+#include <pthread.h>
 
 #include "ass_filesystem.h"
 
@@ -38,6 +39,7 @@ struct ass_library {
     size_t num_fontdata;
     void (*msg_callback)(int, const char *, va_list, void *);
     void *msg_callback_data;
+    pthread_mutex_t msg_lock;   // rendering threads log one message at a time
 };
 
 char *ass_load_file(struct ass_library *library, const char *fname, FileNameSource hint, size_t *bufsize);

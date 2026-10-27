@@ -118,7 +118,9 @@ void ass_msg(ASS_Library *priv, int lvl, const char *fmt, ...)
 {
     va_list va;
     va_start(va, fmt);
+    pthread_mutex_lock(&priv->msg_lock);
     priv->msg_callback(lvl, fmt, va, priv->msg_callback_data);
+    pthread_mutex_unlock(&priv->msg_lock);
     va_end(va);
 }
 
