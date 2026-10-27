@@ -113,6 +113,7 @@ typedef struct
 // ass_cache_flush() moves to the back of their caches' eviction order.
 typedef struct {
     struct cache_item *recent;
+    int64_t wait_us;    // spent waiting for items other threads were constructing
 } CacheClient;
 
 // Lookups may run on several threads at once, each with its own client.

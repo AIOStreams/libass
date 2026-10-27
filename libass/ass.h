@@ -596,6 +596,18 @@ ASS_DEPRECATED("it does nothing")
 int ass_fonts_update(ASS_Renderer *priv);
 
 /**
+ * \brief Set how many threads render events: the one calling
+ * ass_render_frame(), and helpers it starts when a frame is costly enough.
+ * The message callback may then be called from the helpers, one message at
+ * a time.
+ * \param priv renderer handle
+ * \param threads 1 for the calling thread alone, 0 for the default: the
+ * number of processors, at most 8
+ * \return the number of threads that will be used
+ */
+int ass_set_threads(ASS_Renderer *priv, int threads);
+
+/**
  * \brief Set hard cache limits.  Do not set, or set to zero, for reasonable
  * defaults.  The default bitmap cache size is for a 4K frame and shrinks with
  * smaller frames, to no less than 32 MB.

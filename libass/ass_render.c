@@ -76,7 +76,7 @@ static void text_info_done(TextInfo* text_info)
     free(text_info->combined_bitmaps);
 }
 
-static bool render_context_init(RenderContext *state, ASS_Renderer *priv)
+bool ass_render_context_init(RenderContext *state, ASS_Renderer *priv)
 {
     state->renderer = priv;
 
@@ -90,7 +90,7 @@ static bool render_context_init(RenderContext *state, ASS_Renderer *priv)
     return ass_rasterizer_init(&priv->engine, &state->rasterizer, RASTERIZER_PRECISION);
 }
 
-static void render_context_done(RenderContext *state)
+void ass_render_context_done(RenderContext *state)
 {
     ass_rasterizer_done(&state->rasterizer);
 
@@ -151,7 +151,7 @@ ASS_Renderer *ass_renderer_init(ASS_Library *library)
 
     priv->cache.glyph_max = GLYPH_CACHE_MAX;
 
-    if (!render_context_init(&priv->state, priv))
+    if (!ass_render_context_init(&priv->state, priv))
         goto fail;
 
     priv->user_override_style.Name = "OverrideStyle"; // name insignificant
@@ -161,6 +161,7 @@ ASS_Renderer *ass_renderer_init(ASS_Library *library)
 
     ass_shaper_info(library);
     priv->settings.shaper = ASS_SHAPING_COMPLEX;
+    priv->settings.threads = ass_default_threads();
 
     ass_msg(library, MSGL_V, "Initialized");
 
@@ -177,6 +178,8 @@ void ass_renderer_done(ASS_Renderer *render_priv)
 {
     if (!render_priv)
         return;
+
+    ass_render_pool_free(render_priv->pool);
 
     ass_frame_unref(render_priv->images_root);
     ass_frame_unref(render_priv->prev_images_root);
@@ -195,7 +198,7 @@ void ass_renderer_done(ASS_Renderer *render_priv)
         FT_Done_FreeType(render_priv->ftlibrary);
     free(render_priv->eimg);
 
-    render_context_done(&render_priv->state);
+    ass_render_context_done(&render_priv->state);
 
     free(render_priv->settings.default_font);
     free(render_priv->settings.default_family);
@@ -2804,7 +2807,7 @@ static void add_background(RenderContext *state, EventImages *event_images)
  * \param event_images struct containing resulting images, will also be initialized
  * Process event, appending resulting ASS_Image's to images_root.
  */
-static bool
+bool
 ass_render_event(RenderContext *state, ASS_Event *event,
                  EventImages *event_images)
 {
@@ -3044,7 +3047,7 @@ static void check_cache_limits(ASS_Renderer *priv, CacheStore *cache)
     ass_cache_cut(cache->shape_cache, SHAPE_CACHE_MAX_SIZE);
 }
 
-static void setup_shaper(ASS_Shaper *shaper, ASS_Renderer *render_priv)
+void ass_setup_shaper(ASS_Shaper *shaper, ASS_Renderer *render_priv)
 {
     ASS_Track *track = render_priv->track;
 
@@ -3090,7 +3093,7 @@ ass_start_frame(ASS_Renderer *render_priv, ASS_Track *track,
             render_priv->fontselect, render_priv->num_emfonts);
     }
 
-    setup_shaper(render_priv->state.shaper, render_priv);
+    ass_setup_shaper(render_priv->state.shaper, render_priv);
 
     // PAR correction
     double par = render_priv->settings.par;
@@ -3408,10 +3411,16 @@ ASS_Image *ass_render_frame(ASS_Renderer *priv, ASS_Track *track,
                     realloc(priv->eimg,
                             priv->eimg_size * sizeof(EventImages));
             }
-            if (ass_render_event(&priv->state, event, priv->eimg + cnt))
-                cnt++;
+            priv->eimg[cnt++] = (EventImages) { .event = event };
         }
     }
+
+    ass_render_events(priv, cnt);
+    int rendered = 0;
+    for (int i = 0; i < cnt; i++)
+        if (priv->eimg[i].rendered)
+            priv->eimg[rendered++] = priv->eimg[i];
+    cnt = rendered;
 
     // sort by layer
     if (cnt > 0)

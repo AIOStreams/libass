@@ -62,6 +62,7 @@ libass_src = files(
     'ass_rasterizer.c',
     'ass_render.c',
     'ass_render_api.c',
+    'ass_render_pool.c',
     'ass_shaper.c',
     'ass_string.c',
     'ass_strtod.c',

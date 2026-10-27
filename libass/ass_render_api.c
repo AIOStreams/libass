@@ -190,6 +190,18 @@ int ass_fonts_update(ASS_Renderer *render_priv)
     return 1;
 }
 
+int ass_set_threads(ASS_Renderer *priv, int threads)
+{
+    if (threads <= 0)
+        threads = ass_default_threads();
+    if (threads != priv->settings.threads) {
+        ass_render_pool_free(priv->pool);
+        priv->pool = NULL;
+        priv->settings.threads = threads;
+    }
+    return threads;
+}
+
 void ass_set_cache_limits(ASS_Renderer *render_priv, int glyph_max,
                           int bitmap_max)
 {

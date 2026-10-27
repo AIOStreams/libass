@@ -36,6 +36,7 @@
 
 #include "ass.h"
 #include "ass_string.h"
+#include <time.h>
 
 #ifndef SIZE_MAX
 #define SIZE_MAX ((size_t)-1)
@@ -253,6 +254,13 @@ static inline int mystrtod(char **p, double *res)
     char *start = *p;
     *res = ass_strtod(*p, p);
     return *p != start;
+}
+
+static inline int64_t ass_now_us(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t) ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 }
 
 // strtoll clamped to int32, for bases 10 and 16

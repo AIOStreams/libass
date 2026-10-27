@@ -80,6 +80,8 @@ typedef struct {
 
     char *default_font;
     char *default_family;
+
+    int threads;    // that render events, the calling one included
 } ASS_Settings;
 
 // a rendered event
@@ -89,6 +91,8 @@ typedef struct {
     int detect_collisions;
     int shift_direction;
     ASS_Event *event;
+    bool rendered;
+    uint32_t cost_us;   // how long rendering took, or is expected to take
 } EventImages;
 
 typedef enum {
@@ -313,6 +317,8 @@ typedef struct {
     size_t composite_max_size;
 } CacheStore;
 
+typedef struct render_pool RenderPool;
+
 struct ass_renderer {
     ASS_Library *library;
     FT_Library ftlibrary;
@@ -339,6 +345,7 @@ struct ass_renderer {
 
     RenderContext state;
     CacheStore cache;
+    RenderPool *pool;
 
     BitmapEngine engine;
 
@@ -358,6 +365,16 @@ typedef struct {
 } Rect;
 
 void ass_reset_render_context(RenderContext *state, ASS_Style *style);
+bool ass_render_context_init(RenderContext *state, ASS_Renderer *priv);
+void ass_render_context_done(RenderContext *state);
+void ass_setup_shaper(ASS_Shaper *shaper, ASS_Renderer *render_priv);
+bool ass_render_event(RenderContext *state, ASS_Event *event,
+                      EventImages *event_images);
+
+int ass_default_threads(void);
+// Renders the frame's events in eimg, on helper threads too when it pays.
+void ass_render_events(ASS_Renderer *priv, int count);
+void ass_render_pool_free(RenderPool *pool);
 void ass_frame_ref(ASS_Image *img);
 void ass_frame_unref(ASS_Image *img);
 ASS_Vector ass_layout_res(ASS_Renderer *render_priv);

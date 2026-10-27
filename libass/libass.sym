@@ -36,6 +36,7 @@ ass_process_force_style
 ass_set_message_cb
 ass_fonts_update
 ass_set_cache_limits
+ass_set_threads
 ass_flush_events
 ass_set_shaper
 ass_set_line_position

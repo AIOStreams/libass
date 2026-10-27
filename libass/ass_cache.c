@@ -490,17 +490,19 @@ static CacheItem *find_item(CacheItem *item, CacheItem *end, ass_hashcode hash,
     return NULL;
 }
 
-static void wait_until_ready(Cache *cache, CacheItem *item)
+static void wait_until_ready(Cache *cache, CacheClient *client, CacheItem *item)
 {
     if (atomic_load_explicit(&item->state, memory_order_acquire) == ITEM_READY)
         return;
 
+    int64_t start = ass_now_us();
     pthread_mutex_lock(&cache->wait_lock);
     unsigned state = ITEM_CONSTRUCTING;
     atomic_compare_exchange_strong(&item->state, &state, ITEM_AWAITED);
     while (atomic_load_explicit(&item->state, memory_order_acquire) != ITEM_READY)
         pthread_cond_wait(&cache->wait_cond, &cache->wait_lock);
     pthread_mutex_unlock(&cache->wait_lock);
+    client->wait_us += ass_now_us() - start;
 }
 
 static void mark_ready(Cache *cache, CacheItem *item)
@@ -539,7 +541,7 @@ void *ass_cache_get(Cache *cache, CacheClient *client, void *key, void *priv)
     if (item) {
         desc->key_move_func(NULL, key);
         use_item(cache, client, item);
-        wait_until_ready(cache, item);
+        wait_until_ready(cache, client, item);
         return (char *) item + CACHE_ITEM_SIZE;
     }
 
@@ -574,7 +576,7 @@ void *ass_cache_get(Cache *cache, CacheClient *client, void *key, void *priv)
             desc->key_destruct_func(new_key);
             free(item);
             use_item(cache, client, other);
-            wait_until_ready(cache, other);
+            wait_until_ready(cache, client, other);
             return (char *) other + CACHE_ITEM_SIZE;
         }
         searched = head;
