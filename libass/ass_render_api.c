@@ -177,9 +177,32 @@ void ass_set_selective_style_override_enabled(ASS_Renderer *priv, int bits)
     }
 }
 
+static bool same_style(const ASS_Style *a, const ASS_Style *b)
+{
+    return a->FontName && b->FontName && !strcmp(a->FontName, b->FontName) &&
+        a->FontSize == b->FontSize &&
+        a->PrimaryColour == b->PrimaryColour &&
+        a->SecondaryColour == b->SecondaryColour &&
+        a->OutlineColour == b->OutlineColour &&
+        a->BackColour == b->BackColour &&
+        a->Bold == b->Bold && a->Italic == b->Italic &&
+        a->Underline == b->Underline && a->StrikeOut == b->StrikeOut &&
+        a->ScaleX == b->ScaleX && a->ScaleY == b->ScaleY &&
+        a->Spacing == b->Spacing && a->Angle == b->Angle &&
+        a->BorderStyle == b->BorderStyle &&
+        a->Outline == b->Outline && a->Shadow == b->Shadow &&
+        a->Alignment == b->Alignment &&
+        a->MarginL == b->MarginL && a->MarginR == b->MarginR &&
+        a->MarginV == b->MarginV && a->Encoding == b->Encoding &&
+        a->Blur == b->Blur && a->Justify == b->Justify;
+}
+
 void ass_set_selective_style_override(ASS_Renderer *priv, ASS_Style *style)
 {
     ASS_Style *user_style = &priv->user_override_style;
+    // Players set it again with every other setting; the same style keeps the caches.
+    if (same_style(user_style, style))
+        return;
     free(user_style->FontName);
     *user_style = *style;
     user_style->FontName = strdup(user_style->FontName);
