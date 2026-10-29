@@ -139,9 +139,11 @@ void ass_set_line_spacing(ASS_Renderer *priv, double line_spacing)
 
 void ass_set_line_position(ASS_Renderer *priv, double line_position)
 {
+    // It only moves where events are placed, which no cache holds,
+    // so a player can slide subtitles every frame.
     if (priv->settings.line_position != line_position) {
         priv->settings.line_position = line_position;
-        ass_reconfigure(priv);
+        priv->render_id++;
     }
 }
 
