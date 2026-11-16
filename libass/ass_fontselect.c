@@ -103,6 +103,8 @@ struct font_selector {
     ASS_FontProvider *default_provider;
     ASS_FontProvider *embedded_provider;
 
+    unsigned generation;    // changes whenever fonts come or go
+
     pthread_mutex_t lock;
 };
 
@@ -514,6 +516,7 @@ ass_font_provider_add_font(ASS_FontProvider *provider,
     info->provider = provider;
 
     selector->n_font++;
+    selector->generation++;
 
     free_font_info(&implicit_meta);
     free(implicit_meta.postscript_name);
@@ -555,6 +558,7 @@ static void ass_fontselect_cleanup(ASS_FontSelector *selector)
     }
 
     selector->n_font = w;
+    selector->generation++;
 }
 
 void ass_font_provider_free(ASS_FontProvider *provider)
@@ -1186,6 +1190,11 @@ void ass_fontselect_lock(ASS_FontSelector *priv)
 void ass_fontselect_unlock(ASS_FontSelector *priv)
 {
     pthread_mutex_unlock(&priv->lock);
+}
+
+unsigned ass_fontselect_generation(ASS_FontSelector *priv)
+{
+    return priv->generation;
 }
 
 void ass_map_font(const ASS_FontMapping *map, int len, const char *name,

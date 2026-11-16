@@ -255,6 +255,8 @@ void ass_fontselect_free(ASS_FontSelector *priv);
 // For FT_Library and the selector, which threads adding faces share
 void ass_fontselect_lock(ASS_FontSelector *priv);
 void ass_fontselect_unlock(ASS_FontSelector *priv);
+// Changes only between frames.
+unsigned ass_fontselect_generation(ASS_FontSelector *priv);
 
 // Font provider functions
 ASS_FontProvider *ass_font_provider_new(ASS_FontSelector *selector,

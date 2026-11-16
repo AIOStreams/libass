@@ -591,6 +591,8 @@ size_t ass_font_construct(void *key, void *value, void *priv)
     font->library = render_priv->library;
     font->ftlibrary = render_priv->ftlibrary;
     atomic_init(&font->n_faces, 0);
+    for (int i = 0; i < 1 << ASS_FONT_MISSING_BITS; i++)
+        atomic_init(&font->missing[i], 0);
     pthread_mutex_init(&font->lock, NULL);
     font->desc.family = desc->family;
     font->desc.bold = desc->bold;
@@ -766,6 +768,34 @@ static uint32_t get_char_index_any_charmap(ASS_Font *font, int face_index, uint3
     return index;
 }
 
+// What get_char_index_any_charmap() leaves the face on when no charmap has the character.
+static void settle_on_last_charmap(ASS_Font *font, int face_index)
+{
+    FT_Face face = font->faces[face_index];
+    if (face->num_charmaps <= 0)
+        return;
+    ass_font_lock(font);
+    FT_CharMap last = face->charmaps[face->num_charmaps - 1];
+    if (face->charmap != last) {
+        FT_Set_Charmap(face, last);
+        for (int i = 0; i < 1 << ASS_FONT_INDEX_CACHE_BITS; i++)
+            atomic_store_explicit(&font->char_indices[face_index][i], 0, memory_order_relaxed);
+    }
+    ass_font_unlock(font);
+}
+
+// The fonts and faces a character was missing with, which have to be the same to skip the search.
+static inline uint64_t missing_tag(ASS_FontSelector *fontsel, uint32_t symbol, int n_faces)
+{
+    return (uint64_t) symbol << 32 | (uint64_t) (ass_fontselect_generation(fontsel) & 0xffff) << 16 |
+           (uint64_t) n_faces << 8;
+}
+
+static inline _Atomic uint64_t *missing_slot(ASS_Font *font, uint32_t symbol)
+{
+    return &font->missing[(symbol * 2654435761u) >> (32 - ASS_FONT_MISSING_BITS)];
+}
+
 /**
  * \brief Get glyph and face index
  * Finds a face that has the requested codepoint and returns both face
@@ -796,7 +826,13 @@ int ass_font_get_index(ASS_FontSelector *fontsel, ASS_Font *font,
             *face_index = i;
     }
 
-    if (index == 0) {
+    _Atomic uint64_t *missing = missing_slot(font, symbol);
+    uint64_t known = index ? 0 : atomic_load_explicit(missing, memory_order_relaxed);
+    if (known && known >> 8 == missing_tag(fontsel, symbol, n_faces) >> 8) {
+        *face_index = (int) (known & 0xff) - 1;
+        if (*face_index >= 0)
+            settle_on_last_charmap(font, *face_index);
+    } else if (index == 0) {
         int face_idx;
         ass_msg(font->library, MSGL_INFO,
                 "Glyph 0x%X not found, selecting one more "
@@ -817,6 +853,11 @@ int ass_font_get_index(ASS_FontSelector *fontsel, ASS_Font *font,
                         symbol, (int) font->desc.family.len, font->desc.family.str, font->desc.bold,
                         font->desc.italic);
             }
+        }
+        if (index == 0) {
+            int now = atomic_load_explicit(&font->n_faces, memory_order_acquire);
+            atomic_store_explicit(missing, missing_tag(fontsel, symbol, now) | (uint64_t) (face_idx + 1),
+                                  memory_order_relaxed);
         }
     }
 

@@ -38,6 +38,7 @@ typedef struct ass_font ASS_Font;
 
 #define ASS_FONT_MAX_FACES 10
 #define ASS_FONT_INDEX_CACHE_BITS 9
+#define ASS_FONT_MISSING_BITS 8
 #define DECO_UNDERLINE     1
 #define DECO_STRIKETHROUGH 2
 #define DECO_ROTATE        4
@@ -51,6 +52,8 @@ struct ass_font {
     struct hb_font_t *hb_fonts[ASS_FONT_MAX_FACES];
     // Each face's glyph indices, read without the lock: codepoint << 32 | index + 1
     _Atomic uint64_t *char_indices[ASS_FONT_MAX_FACES];
+    // Codepoints no face has, so the fallback search can be skipped
+    _Atomic uint64_t missing[1 << ASS_FONT_MISSING_BITS];
     atomic_int n_faces;     // faces below it are complete
     pthread_mutex_t lock;   // FreeType lets one thread at a time use a face
 };
