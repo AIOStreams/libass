@@ -150,6 +150,18 @@ START(bitmap_ref, bitmap_ref_key)
     VECTOR(pos_o)
 END(BitmapRef)
 
+// describes a rendered event; look is the renderer's look_generation
+// on call to ass_cache_get(), effect and text are non-owning views
+START(event, event_hash_key)
+    GENERIC(uint32_t, look)
+    GENERIC(int, style)
+    GENERIC(int, margin_l)
+    GENERIC(int, margin_r)
+    GENERIC(int, margin_v)
+    STRING(effect)
+    STRING(text)
+END(EventHashKey)
+
 #undef START
 #undef GENERIC
 #undef STRING

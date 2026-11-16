@@ -45,6 +45,16 @@ typedef struct {
     ShapedGlyph *glyphs;
 } ShapeHashValue;
 
+// A rendered event that doesn't change with time
+typedef struct {
+    bool timed;             // it does: rendered every frame, nothing kept
+    bool rendered;
+    ASS_Image *imgs;        // before collisions move them; held
+    int top, height, left, width;
+    int detect_collisions;
+    int shift_direction;
+} EventHashValue;
+
 typedef struct {
     bool valid;
     ASS_Outline outline[2];
@@ -124,8 +134,12 @@ void *ass_cache_get(Cache *cache, CacheClient *client, void *key, void *priv);
 void *ass_cache_key(void *value);
 void ass_cache_inc_ref(void *value);
 void ass_cache_dec_ref(void *value);
+// Counts as a lookup of a value held from an earlier frame.
+void ass_cache_use(CacheClient *client, void *value);
 void ass_cache_flush(CacheClient *client);
 void ass_cache_cut(Cache *cache, size_t max_size);
+// Like ass_cache_cut(), for the items no lookup used in the last `frames` frames.
+void ass_cache_cut_unused(Cache *cache, unsigned frames);
 // Remembers evicted items' hashes, so ass_cache_take_returned() can tell how
 // many bytes of them lookups made again since it was last called.
 bool ass_cache_watch_returns(Cache *cache, unsigned slots_log2);
@@ -139,5 +153,6 @@ Cache *ass_glyph_metrics_cache_create(void);
 Cache *ass_shape_cache_create(void);
 Cache *ass_bitmap_cache_create(void);
 Cache *ass_composite_cache_create(void);
+Cache *ass_event_cache_create(void);
 
 #endif                          /* LIBASS_CACHE_H */

@@ -144,10 +144,11 @@ ASS_Renderer *ass_renderer_init(ASS_Library *library)
     priv->cache.face_size_metrics_cache = ass_face_size_metrics_cache_create();
     priv->cache.metrics_cache = ass_glyph_metrics_cache_create();
     priv->cache.shape_cache = ass_shape_cache_create();
+    priv->cache.event_cache = ass_event_cache_create();
     if (!priv->cache.font_cache || !priv->cache.bitmap_cache ||
         !priv->cache.composite_cache || !priv->cache.outline_cache ||
         !priv->cache.face_size_metrics_cache || !priv->cache.metrics_cache ||
-        !priv->cache.shape_cache)
+        !priv->cache.shape_cache || !priv->cache.event_cache)
         goto fail;
 
     priv->cache.glyph_max = GLYPH_CACHE_MAX;
@@ -188,6 +189,8 @@ void ass_renderer_done(ASS_Renderer *render_priv)
     ass_frame_unref(render_priv->images_root);
     ass_frame_unref(render_priv->prev_images_root);
 
+    // Before the composites, which its events hold.
+    ass_cache_done(render_priv->cache.event_cache);
     ass_cache_done(render_priv->cache.composite_cache);
     ass_cache_done(render_priv->cache.bitmap_cache);
     ass_cache_done(render_priv->cache.outline_cache);
@@ -204,6 +207,8 @@ void ass_renderer_done(ASS_Renderer *render_priv)
 
     ass_render_context_done(&render_priv->state);
 
+    free(render_priv->look);
+    free(render_priv->next_look);
     free(render_priv->settings.default_font);
     free(render_priv->settings.default_family);
 
@@ -243,6 +248,21 @@ static ASS_Image *my_draw_bitmap(unsigned char *bitmap, int bitmap_w,
     img->ref_count = 0;
 
     return &img->result;
+}
+
+// A copy of `img` whose bitmap `holder`, a cache value, keeps.
+static ASS_Image *clone_image(const ASS_Image *img, void *holder)
+{
+    ASS_ImagePriv *clone = malloc(sizeof(ASS_ImagePriv));
+    if (!clone)
+        return NULL;
+    clone->result = *img;
+    clone->result.next = NULL;
+    clone->source = holder;
+    ass_cache_inc_ref(holder);
+    clone->buffer = NULL;
+    clone->ref_count = 0;
+    return &clone->result;
 }
 
 /**
@@ -1134,6 +1154,7 @@ init_render_context(RenderContext *state, ASS_Event *event)
     state->event = event;
     state->parsed_tags = 0;
     state->evt_type = EVENT_NORMAL;
+    state->timed = false;
 
     state->wrap_style = render_priv->track->WrapStyle;
 
@@ -2819,9 +2840,9 @@ static void add_background(RenderContext *state, EventImages *event_images)
  * \param event_images struct containing resulting images, will also be initialized
  * Process event, appending resulting ASS_Image's to images_root.
  */
-bool
-ass_render_event(RenderContext *state, ASS_Event *event,
-                 EventImages *event_images)
+static bool
+render_event(RenderContext *state, ASS_Event *event,
+             EventImages *event_images)
 {
     ASS_Renderer *render_priv = state->renderer;
     if (event->Style >= render_priv->track->n_styles) {
@@ -3039,6 +3060,114 @@ ass_render_event(RenderContext *state, ASS_Event *event,
     return true;
 }
 
+static ASS_Image *ass_free_image(ASS_Image *img);
+
+struct event_construct {
+    RenderContext *state;
+    ASS_Event *event;
+    EventImages images;
+    bool rendered, ok;
+};
+
+size_t ass_event_construct(void *key, void *value, void *priv)
+{
+    EventHashKey *k = key;
+    EventHashValue *v = value;
+    struct event_construct *c = priv;
+
+    c->ok = render_event(c->state, c->event, &c->images);
+    c->rendered = true;
+    *v = (EventHashValue) { .timed = c->state->timed, .rendered = c->ok };
+    size_t size = sizeof(*v) + k->effect.len + k->text.len;
+    if (!c->ok || v->timed)
+        return size;
+
+    v->imgs = c->images.imgs;
+    ass_frame_ref(v->imgs);
+    v->top = c->images.top;
+    v->height = c->images.height;
+    v->left = c->images.left;
+    v->width = c->images.width;
+    v->detect_collisions = c->images.detect_collisions;
+    v->shift_direction = c->images.shift_direction;
+    return size;
+}
+
+/**
+ * \brief Render an event, or copy its images from the event cache when it
+ * doesn't change with time; collisions move the copies.
+ */
+bool
+ass_render_event(RenderContext *state, ASS_Event *event,
+                 EventImages *event_images)
+{
+    ASS_Renderer *render_priv = state->renderer;
+    ASS_RenderPriv *known = event->render_priv;
+    if (!event->Text || event->Duration < EVENT_CACHE_MIN_MS ||
+        (known && known->timed_text == event->Text &&
+         known->timed_look == render_priv->look_generation))
+        return render_event(state, event, event_images);
+
+    const char *effect = event->Effect ? event->Effect : "";
+    EventHashKey key = {
+        .look = render_priv->look_generation,
+        .style = event->Style,
+        .margin_l = event->MarginL,
+        .margin_r = event->MarginR,
+        .margin_v = event->MarginV,
+        .effect = { effect, strlen(effect) },
+        .text = { event->Text, strlen(event->Text) },
+    };
+    struct event_construct c = { .state = state, .event = event };
+    EventHashValue *v = ass_cache_get(render_priv->cache.event_cache,
+                                      &state->cache_client, &key, &c);
+    if (!v)
+        return render_event(state, event, event_images);
+    if (v->timed) {
+        if (!known)
+            known = event->render_priv = calloc(1, sizeof(ASS_RenderPriv));
+        if (known) {
+            known->timed_text = event->Text;
+            known->timed_look = render_priv->look_generation;
+        }
+        if (!c.rendered)
+            return render_event(state, event, event_images);
+        if (!c.ok)
+            return false;
+        *event_images = c.images;
+        return true;
+    }
+    if (!v->rendered)
+        return false;
+
+    ASS_Image *head = NULL, **tail = &head;
+    for (ASS_Image *img = v->imgs; img; img = img->next) {
+        // Its composite ages as it would had the event been rendered.
+        void *composite = ((ASS_ImagePriv *) img)->source;
+        if (composite)
+            ass_cache_use(&state->cache_client, composite);
+        ASS_Image *clone = clone_image(img, v);
+        if (!clone) {
+            while (head)
+                head = ass_free_image(head);
+            return false;
+        }
+        *tail = clone;
+        tail = &clone->next;
+    }
+
+    memset(event_images, 0, sizeof(*event_images));
+    event_images->imgs = head;
+    event_images->top = v->top;
+    event_images->height = v->height;
+    event_images->left = v->left;
+    event_images->width = v->width;
+    event_images->detect_collisions = v->detect_collisions;
+    event_images->shift_direction = v->shift_direction;
+    event_images->event = event;
+    return true;
+}
+
 /**
  * \brief Check cache limits and reset cache if they are exceeded
  */
@@ -3065,6 +3194,8 @@ static void check_cache_limits(ASS_Renderer *priv, CacheStore *cache)
         bitmap_max = BITMAP_CACHE_MAX_SIZE * grown;
         composite_max = COMPOSITE_CACHE_MAX_SIZE * grown;
     }
+    // An event that stopped showing would keep its composites from being evicted.
+    ass_cache_cut_unused(cache->event_cache, EVENT_CACHE_FRAMES);
     ass_cache_cut(cache->composite_cache, composite_max);
     ass_cache_cut(cache->bitmap_cache, bitmap_max);
     ass_cache_cut(cache->outline_cache, cache->glyph_max);
@@ -3084,6 +3215,83 @@ void ass_setup_shaper(ASS_Shaper *shaper, ASS_Renderer *render_priv)
 #endif
     ass_shaper_set_whole_text_layout(shaper,
             track->parser_priv->feature_flags & FEATURE_MASK(ASS_FEATURE_WHOLE_TEXT_LAYOUT));
+}
+
+static void look_append(ASS_Renderer *priv, const void *data, size_t size)
+{
+    if (!size || !priv->next_look_ok)
+        return;
+    if (priv->next_look_size + size > priv->next_look_cap) {
+        size_t cap = FFMAX(2 * priv->next_look_cap, priv->next_look_size + size);
+        char *grown = realloc(priv->next_look, cap);
+        if (!grown) {
+            priv->next_look_ok = false;
+            return;
+        }
+        priv->next_look = grown;
+        priv->next_look_cap = cap;
+    }
+    memcpy(priv->next_look + priv->next_look_size, data, size);
+    priv->next_look_size += size;
+}
+
+static void look_append_string(ASS_Renderer *priv, const char *str)
+{
+    size_t len = str ? strlen(str) : 0;
+    look_append(priv, &len, sizeof(len));
+    look_append(priv, str, len);
+}
+
+static void look_append_style(ASS_Renderer *priv, const ASS_Style *style)
+{
+    look_append(priv, &style->FontSize, sizeof(*style) - offsetof(ASS_Style, FontSize));
+    look_append_string(priv, style->Name);
+    look_append_string(priv, style->FontName);
+}
+
+/**
+ * \brief Change look_generation when the settings or track state that events'
+ * looks depend on change.
+ */
+static void update_look(ASS_Renderer *priv)
+{
+    ASS_Track *track = priv->track;
+    ASS_Settings *s = &priv->settings;
+
+    priv->next_look_size = 0;
+    priv->next_look_ok = true;
+    look_append(priv, s, offsetof(ASS_Settings, default_font));
+    look_append_string(priv, s->default_font);
+    look_append_string(priv, s->default_family);
+    look_append_style(priv, &priv->user_override_style);
+    look_append(priv, &priv->render_id, sizeof(priv->render_id));
+    look_append(priv, &priv->num_emfonts, sizeof(priv->num_emfonts));
+    look_append(priv, &priv->par_scale_x, sizeof(priv->par_scale_x));
+    look_append(priv, &track->track_type, offsetof(ASS_Track, Language) - offsetof(ASS_Track, track_type));
+    look_append_string(priv, track->Language);
+    look_append(priv, &track->YCbCrMatrix, sizeof(track->YCbCrMatrix));
+    look_append(priv, &track->LayoutResX, sizeof(track->LayoutResX));
+    look_append(priv, &track->LayoutResY, sizeof(track->LayoutResY));
+    look_append(priv, &track->parser_priv->feature_flags, sizeof(track->parser_priv->feature_flags));
+    for (int i = 0; i < track->n_styles; i++)
+        look_append_style(priv, track->styles + i);
+
+    if (!priv->next_look_ok) {
+        // An incomplete look can't be compared, so nothing rendered with it is reused.
+        free(priv->look);
+        priv->look = NULL;
+        priv->look_size = 0;
+        priv->look_generation++;
+    } else if (!priv->look || priv->next_look_size != priv->look_size ||
+               memcmp(priv->next_look, priv->look, priv->look_size)) {
+        char *old = priv->look;
+        size_t old_size = priv->look_size;
+        priv->look = priv->next_look;
+        priv->look_size = priv->next_look_size;
+        priv->next_look = old;
+        priv->next_look_cap = old_size;
+        priv->look_generation++;
+    }
 }
 
 /**
@@ -3134,6 +3342,7 @@ ass_start_frame(ASS_Renderer *render_priv, ASS_Track *track,
             par = 1.0;
     }
     render_priv->par_scale_x = par;
+    update_look(render_priv);
 
     render_priv->prev_images_root = render_priv->images_root;
     render_priv->images_root = NULL;

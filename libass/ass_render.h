@@ -50,13 +50,15 @@
 #define DEFAULT_CACHE_MIN_SIZE (32 * MEGABYTE)
 #define CACHE_RETURN_DECAY 8    // returned bytes fade by 1/this a frame
 #define CACHE_RETURN_LIMIT 8    // the default grows once they pass 1/this of it
+#define EVENT_CACHE_FRAMES 2    // a rendered event goes once this many frames in a row don't show it
+#define EVENT_CACHE_MIN_MS 50   // a shorter event is one frame of frame-by-frame typesetting
 
 #define PARSED_FADE (1<<0)
 #define PARSED_A    (1<<1)
 
 typedef struct {
     ASS_Image result;
-    CompositeHashValue *source;
+    void *source;               // the cache value its bitmap belongs to, held
     unsigned char *buffer;
     size_t ref_count;
 } ASS_ImagePriv;
@@ -229,6 +231,7 @@ struct render_context {
     double font_size;
     int parsed_tags;
     int flags;                  // decoration flags (underline/strike-through)
+    bool timed;                 // the event looks different at other times
 
     int alignment;              // alignment overrides go here; if zero, style value will be used
     int justify;                // justify instructions
@@ -314,6 +317,7 @@ typedef struct {
     Cache *face_size_metrics_cache;
     Cache *metrics_cache;
     Cache *shape_cache;
+    Cache *event_cache;
     size_t glyph_max;
     size_t bitmap_max_size;     // 0 = the default for the frame size
     size_t composite_max_size;
@@ -330,6 +334,15 @@ struct ass_renderer {
     size_t num_emfonts;
     ASS_Settings settings;
     int render_id;
+
+    // What events' looks depend on beyond their own fields, and a number that
+    // changes with it for the event cache's keys.
+    uint32_t look_generation;
+    char *look;
+    size_t look_size;
+    char *next_look;
+    size_t next_look_size, next_look_cap;
+    bool next_look_ok;
 
     ASS_Image *images_root;     // rendering result is stored here
     ASS_Image *prev_images_root;
@@ -359,6 +372,10 @@ struct ass_renderer {
 typedef struct render_priv {
     int top, height, left, width;
     int render_id;
+    // The Text and look_generation it was found to change with time under:
+    // while both stay, it skips the event cache.
+    const char *timed_text;
+    uint32_t timed_look;
 } RenderPriv;
 
 typedef struct {

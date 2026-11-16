@@ -32,6 +32,7 @@
 #include "ass_font.h"
 #include "ass_outline.h"
 #include "ass_cache.h"
+#include "ass_render.h"
 
 // Always enable native-endian mode, since we don't care about cross-platform consistency of the hash
 #define WYHASH_LITTLE_ENDIAN 1
@@ -397,6 +398,50 @@ const CacheDesc shape_cache_desc = {
 };
 
 
+// rendered event cache
+static bool event_key_move(void *dst, void *src)
+{
+    EventHashKey *d = dst, *s = src;
+    if (!d)
+        return true;
+
+    *d = *s;
+    d->effect.str = ass_copy_string(s->effect);
+    d->text.str = ass_copy_string(s->text);
+    if (d->effect.str && d->text.str)
+        return true;
+    free((char *) d->effect.str);
+    free((char *) d->text.str);
+    return false;
+}
+
+static void event_key_destruct(void *key)
+{
+    EventHashKey *k = key;
+    free((char *) k->effect.str);
+    free((char *) k->text.str);
+}
+
+static void event_destruct(void *value)
+{
+    EventHashValue *v = value;
+    ass_frame_unref(v->imgs);
+}
+
+size_t ass_event_construct(void *key, void *value, void *priv);
+
+const CacheDesc event_cache_desc = {
+    .hash_func = event_hash,
+    .compare_func = event_compare,
+    .key_move_func = event_key_move,
+    .construct_func = ass_event_construct,
+    .key_destruct_func = event_key_destruct,
+    .value_destruct_func = event_destruct,
+    .key_size = sizeof(EventHashKey),
+    .value_size = sizeof(EventHashValue)
+};
+
+
 
 // Cache data
 //
@@ -609,6 +654,13 @@ void *ass_cache_get(Cache *cache, CacheClient *client, void *key, void *priv)
     return value;
 }
 
+void ass_cache_use(CacheClient *client, void *value)
+{
+    CacheItem *item = value_to_item(value);
+    if (item->cache)
+        use_item(item->cache, client, item);
+}
+
 bool ass_cache_watch_returns(Cache *cache, unsigned slots_log2)
 {
     cache->evicted = calloc(1u << slots_log2, sizeof(*cache->evicted));
@@ -704,18 +756,31 @@ void ass_cache_flush(CacheClient *client)
     }
 }
 
+static void evict_oldest(Cache *cache)
+{
+    CacheItem *item = cache->queue_first;
+    unqueue_item(cache, item);
+    if (atomic_load_explicit(&item->ref_count, memory_order_relaxed) > 1)
+        item->parked = true;
+    else
+        remove_item(cache, item);
+}
+
 // Evicts the least recently used items, parking those others hold.
 void ass_cache_cut(Cache *cache, size_t max_size)
 {
     while (cache->queue_first &&
-           atomic_load_explicit(&cache->cache_size, memory_order_relaxed) > max_size) {
-        CacheItem *item = cache->queue_first;
-        unqueue_item(cache, item);
-        if (atomic_load_explicit(&item->ref_count, memory_order_relaxed) > 1)
-            item->parked = true;
-        else
-            remove_item(cache, item);
-    }
+           atomic_load_explicit(&cache->cache_size, memory_order_relaxed) > max_size)
+        evict_oldest(cache);
+    cache->frame++;
+}
+
+void ass_cache_cut_unused(Cache *cache, unsigned frames)
+{
+    while (cache->queue_first &&
+           cache->frame - atomic_load_explicit(&cache->queue_first->frame,
+                                               memory_order_relaxed) >= frames)
+        evict_oldest(cache);
     cache->frame++;
 }
 
@@ -795,4 +860,9 @@ Cache *ass_bitmap_cache_create(void)
 Cache *ass_composite_cache_create(void)
 {
     return ass_cache_create(&composite_cache_desc);
+}
+
+Cache *ass_event_cache_create(void)
+{
+    return ass_cache_create(&event_cache_desc);
 }
