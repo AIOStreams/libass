@@ -26,6 +26,7 @@
 #include <assert.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <string.h>
 
 #include "ass_utils.h"
 #include "ass_font.h"
@@ -431,6 +432,10 @@ struct cache {
     atomic_size_t cache_size;
     unsigned frame;
 
+    ass_hashcode *evicted;      // hashes of evicted items, one per slot
+    unsigned evicted_mask;
+    atomic_size_t returned;
+
     pthread_mutex_t wait_lock;
     pthread_cond_t wait_cond;
 };
@@ -591,8 +596,24 @@ void *ass_cache_get(Cache *cache, CacheClient *client, void *key, void *priv)
     assert(item->size);
     atomic_fetch_add_explicit(&cache->cache_size, item_cost(item->size),
                               memory_order_relaxed);
+    // The table only changes between frames.
+    if (cache->evicted && cache->evicted[hash & cache->evicted_mask] == hash)
+        atomic_fetch_add_explicit(&cache->returned, item_cost(item->size),
+                                  memory_order_relaxed);
     mark_ready(cache, item);
     return value;
+}
+
+bool ass_cache_watch_returns(Cache *cache, unsigned slots_log2)
+{
+    cache->evicted = calloc(1u << slots_log2, sizeof(*cache->evicted));
+    cache->evicted_mask = (1u << slots_log2) - 1;
+    return cache->evicted;
+}
+
+size_t ass_cache_take_returned(Cache *cache)
+{
+    return atomic_exchange_explicit(&cache->returned, 0, memory_order_relaxed);
 }
 
 void *ass_cache_key(void *value)
@@ -630,6 +651,8 @@ static void remove_item(Cache *cache, CacheItem *item)
                           memory_order_relaxed);
 
     atomic_fetch_sub_explicit(&cache->cache_size, item_cost(item->size), memory_order_relaxed);
+    if (cache->evicted)
+        cache->evicted[item->hash & cache->evicted_mask] = item->hash;
     item->cache = NULL;
     ass_cache_dec_ref((char *) item + CACHE_ITEM_SIZE);
 }
@@ -711,6 +734,10 @@ void ass_cache_empty(Cache *cache)
     cache->queue_first = NULL;
     cache->queue_last = &cache->queue_first;
     atomic_store_explicit(&cache->cache_size, 0, memory_order_relaxed);
+    // Items made again from here weren't evicted for lack of room.
+    if (cache->evicted)
+        memset(cache->evicted, 0, (cache->evicted_mask + 1) * sizeof(*cache->evicted));
+    atomic_store_explicit(&cache->returned, 0, memory_order_relaxed);
 
     while (items) {
         CacheItem *next = atomic_load_explicit(&items->next, memory_order_relaxed);
@@ -724,6 +751,7 @@ void ass_cache_done(Cache *cache)
     ass_cache_empty(cache);
     pthread_cond_destroy(&cache->wait_cond);
     pthread_mutex_destroy(&cache->wait_lock);
+    free(cache->evicted);
     free(cache->map);
     free(cache);
 }

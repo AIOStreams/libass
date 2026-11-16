@@ -126,6 +126,10 @@ void ass_cache_inc_ref(void *value);
 void ass_cache_dec_ref(void *value);
 void ass_cache_flush(CacheClient *client);
 void ass_cache_cut(Cache *cache, size_t max_size);
+// Remembers evicted items' hashes, so ass_cache_take_returned() can tell how
+// many bytes of them lookups made again since it was last called.
+bool ass_cache_watch_returns(Cache *cache, unsigned slots_log2);
+size_t ass_cache_take_returned(Cache *cache);
 void ass_cache_empty(Cache *cache);
 void ass_cache_done(Cache *cache);
 Cache *ass_font_cache_create(void);

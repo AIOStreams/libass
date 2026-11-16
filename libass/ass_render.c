@@ -151,6 +151,9 @@ ASS_Renderer *ass_renderer_init(ASS_Library *library)
         goto fail;
 
     priv->cache.glyph_max = GLYPH_CACHE_MAX;
+    priv->cache.growth = 1;
+    ass_cache_watch_returns(priv->cache.bitmap_cache, 13);
+    ass_cache_watch_returns(priv->cache.composite_cache, 13);
 
     if (!ass_render_context_init(&priv->state, priv))
         goto fail;
@@ -3042,13 +3045,25 @@ ass_render_event(RenderContext *state, ASS_Event *event,
 static void check_cache_limits(ASS_Renderer *priv, CacheStore *cache)
 {
     size_t bitmap_max = cache->bitmap_max_size, composite_max = cache->composite_max_size;
+    size_t returned = ass_cache_take_returned(cache->bitmap_cache) +
+                      ass_cache_take_returned(cache->composite_cache);
     if (!bitmap_max) {
         // Bitmaps grow with the frame's area, so a smaller frame fits as many in less memory.
         double area = (double) priv->settings.frame_width * priv->settings.frame_height;
         double scale = FFMINMAX(area / DEFAULT_CACHE_FRAME_AREA,
                                 (double) DEFAULT_CACHE_MIN_SIZE / (BITMAP_CACHE_MAX_SIZE + COMPOSITE_CACHE_MAX_SIZE), 1);
-        bitmap_max = BITMAP_CACHE_MAX_SIZE * scale;
-        composite_max = COMPOSITE_CACHE_MAX_SIZE * scale;
+        // Evicted bitmaps that keep being made again outgrew the budget:
+        // double it, up to the default for the largest frames.
+        cache->returned += returned - cache->returned / CACHE_RETURN_DECAY;
+        double grown = FFMIN(scale * cache->growth, 1);
+        if (grown < 1 && cache->returned >
+                (BITMAP_CACHE_MAX_SIZE + COMPOSITE_CACHE_MAX_SIZE) * grown / CACHE_RETURN_LIMIT) {
+            cache->growth *= 2;
+            cache->returned = 0;
+            grown = FFMIN(scale * cache->growth, 1);
+        }
+        bitmap_max = BITMAP_CACHE_MAX_SIZE * grown;
+        composite_max = COMPOSITE_CACHE_MAX_SIZE * grown;
     }
     ass_cache_cut(cache->composite_cache, composite_max);
     ass_cache_cut(cache->bitmap_cache, bitmap_max);

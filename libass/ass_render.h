@@ -48,6 +48,8 @@
 #define SHAPE_CACHE_MAX_SIZE (2 * MEGABYTE)
 #define DEFAULT_CACHE_FRAME_AREA (3840 * 2160)
 #define DEFAULT_CACHE_MIN_SIZE (32 * MEGABYTE)
+#define CACHE_RETURN_DECAY 8    // returned bytes fade by 1/this a frame
+#define CACHE_RETURN_LIMIT 8    // the default grows once they pass 1/this of it
 
 #define PARSED_FADE (1<<0)
 #define PARSED_A    (1<<1)
@@ -315,6 +317,8 @@ typedef struct {
     size_t glyph_max;
     size_t bitmap_max_size;     // 0 = the default for the frame size
     size_t composite_max_size;
+    unsigned growth;            // times the default
+    size_t returned;            // bytes of evicted bitmaps made again, fading
 } CacheStore;
 
 typedef struct render_pool RenderPool;
